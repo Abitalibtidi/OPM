@@ -1,0 +1,104 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         String   @default("analyst") // analyst | reviewer | admin
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  valuations Valuation[]
+  auditLogs  AuditLog[]
+}
+
+model Valuation {
+  id              String   @id @default(cuid())
+  name            String
+  description     String?
+  companyName     String
+  valuationDate   String
+  status          String   @default("draft") // draft | in_review | approved | archived
+
+  // OPM Inputs
+  totalEquityValue Float   @default(0)
+  volatility       Float   @default(0.60)
+  riskFreeRate     Float   @default(0.04)
+  term             Float   @default(3.0)
+  dividendYield    Float   @default(0)
+
+  // Backsolve
+  backsolveTargetClassId String?
+  backsolveTargetPPS     Float?
+
+  createdById String
+  createdBy   User   @relation(fields: [createdById], references: [id])
+
+  shareClasses     ShareClass[]
+  valuationResults ValuationResult[]
+  auditLogs        AuditLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ShareClass {
+  id          String @id @default(cuid())
+  valuationId String
+  valuation   Valuation @relation(fields: [valuationId], references: [id], onDelete: Cascade)
+
+  name                 String
+  type                 String  @default("common")  // common | preferred | option
+  sharesOutstanding    Float   @default(0)
+  issuePrice           Float   @default(0)
+  liquidationPreference Float  @default(0)
+  isParticipating      Boolean @default(false)
+  participationCap     Float   @default(0)        // 0 = uncapped
+  conversionRatio      Float   @default(1.0)
+  seniorityLevel       Int     @default(1)
+  liquidationSeniority String  @default("pari_passu") // senior | pari_passu | junior
+  strikePrice          Float   @default(0)        // for options
+  vestingPercent       Float   @default(100)
+  sortOrder            Int     @default(0)
+
+  valuationResults ValuationResult[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ValuationResult {
+  id           String @id @default(cuid())
+  valuationId  String
+  valuation    Valuation  @relation(fields: [valuationId], references: [id], onDelete: Cascade)
+  shareClassId String
+  shareClass   ShareClass @relation(fields: [shareClassId], references: [id], onDelete: Cascade)
+
+  optionValue       Float
+  perShareValue     Float
+  totalValue        Float
+  allocationPercent Float
+  fullyDilutedShares Float
+
+  calculatedAt DateTime @default(now())
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  valuationId String?
+  valuation   Valuation? @relation(fields: [valuationId], references: [id], onDelete: SetNull)
+  action      String
+  details     String
+  ipAddress   String?
+  createdAt   DateTime @default(now())
+}

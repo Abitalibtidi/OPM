@@ -1,0 +1,21 @@
+{
+  "name": "opm-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Option Pricing Model (OPM) equity valuation platform",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "build": "npm run build:server && npm run build:client",
+    "build:server": "cd server && npm run build",
+    "build:client": "cd client && npm run build",
+    "test": "cd server && npm test",
+    "db:migrate": "cd server && npx prisma migrate dev",
+    "db:seed": "cd server && npx prisma db seed",
+    "setup": "npm install && cd server && npm install && npx prisma migrate dev && npx prisma db seed && cd ../client && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
