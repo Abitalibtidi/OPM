@@ -9,19 +9,38 @@ import type { ShareClass } from '../../shared/types';
 const router = Router();
 const prisma = new PrismaClient();
 
+/** Convert Zod errors into a single human-readable message. */
+function formatZodErrors(zodError: z.ZodError): string {
+  return zodError.errors
+    .map((e) => {
+      const field = e.path.join('.');
+      return field ? `${field}: ${e.message}` : e.message;
+    })
+    .join('; ');
+}
+
 const createValuationSchema = z.object({
-  name: z.string().min(1),
-  description: z.string().optional(),
-  companyName: z.string().min(1),
-  valuationDate: z.string(),
-  totalEquityValue: z.number().min(0).optional().default(0),
-  volatility: z.number().min(0.01).max(3).optional().default(0.6),
-  riskFreeRate: z.number().min(0).max(0.5).optional().default(0.04),
-  term: z.number().min(0.01).max(30).optional().default(3),
-  dividendYield: z.number().min(0).max(1).optional().default(0),
+  name: z.string().min(1, 'Valuation name is required'),
+  description: z.string().optional().nullable(),
+  companyName: z.string().min(1, 'Company name is required'),
+  valuationDate: z.string().min(1, 'Valuation date is required'),
+  totalEquityValue: z.number().min(0, 'Total equity value cannot be negative').optional().default(0),
+  volatility: z.number().min(0.01, 'Volatility must be at least 1%').max(3, 'Volatility cannot exceed 300%').optional().default(0.6),
+  riskFreeRate: z.number().min(0, 'Risk-free rate cannot be negative').max(0.5, 'Risk-free rate cannot exceed 50%').optional().default(0.04),
+  term: z.number().min(0.01, 'Expected term must be greater than 0').max(30, 'Expected term cannot exceed 30 years').optional().default(3),
+  dividendYield: z.number().min(0, 'Dividend yield cannot be negative').max(1, 'Dividend yield cannot exceed 100%').optional().default(0),
 });
 
-const updateValuationSchema = createValuationSchema.partial().extend({
+const updateValuationSchema = z.object({
+  name: z.string().min(1, 'Valuation name is required').optional(),
+  description: z.string().optional().nullable(),
+  companyName: z.string().min(1, 'Company name is required').optional(),
+  valuationDate: z.string().optional(),
+  totalEquityValue: z.number().min(0, 'Total equity value cannot be negative').optional(),
+  volatility: z.number().min(0.01, 'Volatility must be at least 1%').max(3, 'Volatility cannot exceed 300%').optional(),
+  riskFreeRate: z.number().min(0, 'Risk-free rate cannot be negative').max(0.5, 'Risk-free rate cannot exceed 50%').optional(),
+  term: z.number().min(0.01, 'Expected term must be greater than 0').max(30, 'Expected term cannot exceed 30 years').optional(),
+  dividendYield: z.number().min(0, 'Dividend yield cannot be negative').max(1, 'Dividend yield cannot exceed 100%').optional(),
   status: z.enum(['draft', 'in_review', 'approved', 'archived']).optional(),
   backsolveTargetClassId: z.string().optional().nullable(),
   backsolveTargetPPS: z.number().min(0).optional().nullable(),
@@ -103,7 +122,7 @@ router.post('/', async (req: Request, res: Response) => {
     res.status(201).json(valuation);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      res.status(400).json({ error: 'Validation failed', details: error.errors });
+      res.status(400).json({ error: formatZodErrors(error), details: error.errors });
       return;
     }
     console.error('Create valuation error:', error);
@@ -188,7 +207,7 @@ router.put('/:id', authorizeValuationAccess, async (req: Request, res: Response)
     res.json(valuation);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      res.status(400).json({ error: 'Validation failed', details: error.errors });
+      res.status(400).json({ error: formatZodErrors(error), details: error.errors });
       return;
     }
     console.error('Update valuation error:', error);
@@ -387,7 +406,7 @@ router.post('/:id/backsolve', authorizeValuationAccess, async (req: Request, res
     res.json(result);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      res.status(400).json({ error: 'Validation failed', details: error.errors });
+      res.status(400).json({ error: formatZodErrors(error), details: error.errors });
       return;
     }
     console.error('Backsolve error:', error);

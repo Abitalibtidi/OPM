@@ -112,18 +112,22 @@ export default function ValuationEditor() {
 
   async function saveCurrentValues() {
     if (!valuation) return;
-    await api.put(`/valuations/${id}`, {
+    const payload: Record<string, unknown> = {
       name: valuation.name,
       companyName: valuation.companyName,
       valuationDate: valuation.valuationDate,
-      description: valuation.description,
       totalEquityValue: valuation.totalEquityValue,
       volatility: valuation.volatility,
       riskFreeRate: valuation.riskFreeRate,
       term: valuation.term,
       dividendYield: valuation.dividendYield,
       status: valuation.status,
-    });
+    };
+    // Only include description if it has a value (avoid sending null)
+    if (valuation.description) {
+      payload.description = valuation.description;
+    }
+    await api.put(`/valuations/${id}`, payload);
   }
 
   async function handleSave() {

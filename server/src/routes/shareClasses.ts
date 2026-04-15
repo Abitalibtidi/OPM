@@ -7,6 +7,15 @@ import { createAuditLog } from '../middleware/audit';
 const router = Router({ mergeParams: true });
 const prisma = new PrismaClient();
 
+function formatZodErrors(zodError: z.ZodError): string {
+  return zodError.errors
+    .map((e) => {
+      const field = e.path.join('.');
+      return field ? `${field}: ${e.message}` : e.message;
+    })
+    .join('; ');
+}
+
 const shareClassSchema = z.object({
   name: z.string().min(1),
   type: z.enum(['common', 'preferred', 'option']),
@@ -76,7 +85,7 @@ router.post('/', authorizeValuationAccess, async (req: Request, res: Response) =
     res.status(201).json(shareClass);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      res.status(400).json({ error: 'Validation failed', details: error.errors });
+      res.status(400).json({ error: formatZodErrors(error), details: error.errors });
       return;
     }
     console.error('Create share class error:', error);
@@ -116,7 +125,7 @@ router.put('/:classId', authorizeValuationAccess, async (req: Request, res: Resp
     res.json(shareClass);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      res.status(400).json({ error: 'Validation failed', details: error.errors });
+      res.status(400).json({ error: formatZodErrors(error), details: error.errors });
       return;
     }
     console.error('Update share class error:', error);
