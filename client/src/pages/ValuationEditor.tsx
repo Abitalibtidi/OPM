@@ -110,23 +110,28 @@ export default function ValuationEditor() {
 
   useEffect(() => { loadValuation(); }, [loadValuation]);
 
+  async function saveCurrentValues() {
+    if (!valuation) return;
+    await api.put(`/valuations/${id}`, {
+      name: valuation.name,
+      companyName: valuation.companyName,
+      valuationDate: valuation.valuationDate,
+      description: valuation.description,
+      totalEquityValue: valuation.totalEquityValue,
+      volatility: valuation.volatility,
+      riskFreeRate: valuation.riskFreeRate,
+      term: valuation.term,
+      dividendYield: valuation.dividendYield,
+      status: valuation.status,
+    });
+  }
+
   async function handleSave() {
     if (!valuation) return;
     setSaving(true);
     setError('');
     try {
-      await api.put(`/valuations/${id}`, {
-        name: valuation.name,
-        companyName: valuation.companyName,
-        valuationDate: valuation.valuationDate,
-        description: valuation.description,
-        totalEquityValue: valuation.totalEquityValue,
-        volatility: valuation.volatility,
-        riskFreeRate: valuation.riskFreeRate,
-        term: valuation.term,
-        dividendYield: valuation.dividendYield,
-        status: valuation.status,
-      });
+      await saveCurrentValues();
       setSuccess('Saved successfully');
       setTimeout(() => setSuccess(''), 3000);
     } catch (err: any) {
@@ -137,9 +142,12 @@ export default function ValuationEditor() {
   }
 
   async function handleCalculate() {
+    if (!valuation) return;
     setCalculating(true);
     setError('');
     try {
+      // Save current form values first so the server uses them
+      await saveCurrentValues();
       await api.post(`/valuations/${id}/calculate`);
       setSuccess('Calculation complete! View results.');
       setTimeout(() => setSuccess(''), 5000);
@@ -152,6 +160,7 @@ export default function ValuationEditor() {
   }
 
   async function handleBacksolve() {
+    if (!valuation) return;
     if (!bsTargetClass || bsTargetPPS <= 0) {
       setError('Select a target class and enter a positive per-share value');
       return;
@@ -159,6 +168,8 @@ export default function ValuationEditor() {
     setBacksolving(true);
     setError('');
     try {
+      // Save current form values first so the server uses them
+      await saveCurrentValues();
       const result = await api.post<any>(`/valuations/${id}/backsolve`, {
         targetClassId: bsTargetClass,
         targetPerShareValue: bsTargetPPS,
