@@ -1,28 +1,52 @@
-name: NodeJS with Webpack
+name: CI
 
 on:
   push:
-    branches: [ "claude/create-opm-repo-HJzk3" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "claude/create-opm-repo-HJzk3" ]
 
 jobs:
-  build:
+  ci:
+    name: Test & Build
     runs-on: ubuntu-latest
 
-    strategy:
-      matrix:
-        node-version: [18.x, 20.x, 22.x]
-
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ matrix.node-version }}
+      - name: Set up Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+          cache: "npm"
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            client/package-lock.json
 
-    - name: Build
-      run: |
-        npm install
-        npx webpack
+      # ── Dependencies ──────────────────────────────────────────────
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+
+      # ── Schema validation ─────────────────────────────────────────
+      - name: Validate Prisma schema
+        working-directory: server
+        run: npx prisma validate
+
+      # ── Tests ─────────────────────────────────────────────────────
+      - name: Run server tests (vitest)
+        working-directory: server
+        run: npm test
+
+      # ── Build ─────────────────────────────────────────────────────
+      # tsc -b + vite build — type errors fail the step
+      - name: Build client (TypeScript + Vite)
+        working-directory: client
+        run: npm run build

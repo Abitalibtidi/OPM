@@ -145,6 +145,131 @@ describe('OPM Calculation', () => {
   });
 });
 
+describe('Warrant support', () => {
+  it('treats warrants like options — nets strike from per-share value', () => {
+    const classes = [
+      makeShareClass({
+        id: 'common',
+        name: 'Common',
+        type: 'common',
+        sharesOutstanding: 9000000,
+      }),
+      makeShareClass({
+        id: 'warrants',
+        name: 'Investor Warrants',
+        type: 'warrant',
+        sharesOutstanding: 1000000,
+        strikePrice: 2.00,
+        vestingPercent: 100,
+      }),
+    ];
+
+    const result = calculateOPM({
+      totalEquityValue: 50000000,
+      volatility: 0.60,
+      riskFreeRate: 0.04,
+      term: 3,
+      dividendYield: 0,
+      shareClasses: classes,
+    });
+
+    expect(result.results).toHaveLength(2);
+
+    const warrantResult = result.results.find((r) => r.shareClassId === 'warrants')!;
+    // Gross allocation should be positive
+    expect(warrantResult.optionValue).toBeGreaterThan(0);
+    // Per-share value should be gross/shares - strike
+    expect(warrantResult.perShareValue).toBeGreaterThan(0);
+    // Per-share value should be less than gross/shares
+    const grossPerShare = warrantResult.optionValue / 1000000;
+    expect(warrantResult.perShareValue).toBeCloseTo(grossPerShare - 2.00, 4);
+
+    // Total allocation sums to equity value
+    const totalAllocated = result.results.reduce((s, r) => s + r.optionValue, 0);
+    expect(totalAllocated).toBeCloseTo(50000000, -3);
+  });
+
+  it('out-of-money warrant gets zero per-share value', () => {
+    const classes = [
+      makeShareClass({
+        id: 'common',
+        name: 'Common',
+        type: 'common',
+        sharesOutstanding: 1000000,
+      }),
+      makeShareClass({
+        id: 'warrants',
+        name: 'Warrants',
+        type: 'warrant',
+        sharesOutstanding: 100000,
+        strikePrice: 500.00, // absurdly high strike
+        vestingPercent: 100,
+      }),
+    ];
+
+    const result = calculateOPM({
+      totalEquityValue: 1000000, // $1 per common share before warrant dilution
+      volatility: 0.60,
+      riskFreeRate: 0.04,
+      term: 3,
+      dividendYield: 0,
+      shareClasses: classes,
+    });
+
+    const warrantResult = result.results.find((r) => r.shareClassId === 'warrants')!;
+    // Per-share value floored at zero for deep OTM warrants
+    expect(warrantResult.perShareValue).toBe(0);
+  });
+
+  it('warrant coexists correctly with preferred and common', () => {
+    const classes = [
+      makeShareClass({
+        id: 'common',
+        name: 'Common',
+        type: 'common',
+        sharesOutstanding: 7000000,
+        seniorityLevel: 2,
+      }),
+      makeShareClass({
+        id: 'seriesA',
+        name: 'Series A',
+        type: 'preferred',
+        sharesOutstanding: 2000000,
+        liquidationPreference: 10000000,
+        isParticipating: false,
+        conversionRatio: 1,
+        seniorityLevel: 1,
+      }),
+      makeShareClass({
+        id: 'warrants',
+        name: 'Lender Warrants',
+        type: 'warrant',
+        sharesOutstanding: 500000,
+        strikePrice: 3.00,
+        vestingPercent: 100,
+      }),
+    ];
+
+    const result = calculateOPM({
+      totalEquityValue: 60000000,
+      volatility: 0.60,
+      riskFreeRate: 0.04,
+      term: 3,
+      dividendYield: 0,
+      shareClasses: classes,
+    });
+
+    expect(result.results).toHaveLength(3);
+    const totalAllocated = result.results.reduce((s, r) => s + r.optionValue, 0);
+    expect(totalAllocated).toBeCloseTo(60000000, -3);
+
+    // All classes should get some value at this equity level
+    result.results.forEach((r) => {
+      expect(r.optionValue).toBeGreaterThan(0);
+    });
+  });
+});
+
 describe('Backsolve', () => {
   it('finds implied equity value from known PPS', () => {
     const classes = [

@@ -10,6 +10,7 @@ import shareClassRoutes from './routes/shareClasses';
 import userRoutes from './routes/users';
 import auditLogRoutes from './routes/auditLog';
 import exportRoutes from './routes/exportRoutes';
+import dlomRoutes from './routes/dlom';
 
 const app = express();
 
@@ -44,6 +45,7 @@ app.use('/api/valuations/:valuationId/share-classes', shareClassRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/audit-log', auditLogRoutes);
 app.use('/api/valuations/:id/export', exportRoutes);
+app.use('/api/valuations/:id/dlom', dlomRoutes);
 
 // Health check
 app.get('/api/health', (_req, res) => {

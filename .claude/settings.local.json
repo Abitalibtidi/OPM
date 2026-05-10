@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Bash(npx prisma *)",
+      "Bash(npm test *)",
+      "Bash(npm install *)",
+      "Bash(node -e \"require\\('xlsx'\\); console.log\\('xlsx ok'\\)\")",
+      "Bash(node -e \"import\\('xlsx'\\).then\\(\\(\\) => console.log\\('ok'\\)\\)\")",
+      "Bash(Select-String \"sqlite\")",
+      "Bash(Select-String \"better\")",
+      "Bash(node *)",
+      "Bash(sqlite3 *)",
+      "PowerShell(where.exe sqlite3 2>$null; if \\(-not $?\\) { \"sqlite3 not found in PATH\" })",
+      "Bash(python -c \"import openpyxl; print\\('openpyxl OK'\\)\")",
+      "PowerShell(Get-ChildItem *)",
+      "Bash(py --version)",
+      "Bash(where.exe python *)",
+      "Bash(where.exe py *)",
+      "PowerShell(npm *)",
+      "PowerShell(Get-ChildItem \"C:\\\\GitHub\\\\OPM\\\\server\\\\node_modules\" | Where-Object { $_.Name -match \"sqlite|prisma|better\" } | Select-Object Name)",
+      "PowerShell($items = [System.IO.Directory]::GetDirectories\\(\"C:\\\\GitHub\\\\OPM\\\\server\\\\node_modules\"\\) | Select-Object -First 20; $items)",
+      "Bash(echo \"Exit code: $?\")",
+      "PowerShell(Get-Command *)",
+      "Bash(tasklist /FI \"IMAGENAME eq node.exe\")",
+      "PowerShell(Get-Process *)"
+    ]
+  }
+}

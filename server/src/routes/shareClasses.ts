@@ -18,7 +18,7 @@ function formatZodErrors(zodError: z.ZodError): string {
 
 const shareClassSchema = z.object({
   name: z.string().min(1),
-  type: z.enum(['common', 'preferred', 'option']),
+  type: z.enum(['common', 'preferred', 'option', 'warrant']),
   sharesOutstanding: z.number().min(0),
   issuePrice: z.number().min(0).optional().default(0),
   liquidationPreference: z.number().min(0).optional().default(0),
@@ -29,6 +29,7 @@ const shareClassSchema = z.object({
   liquidationSeniority: z.enum(['senior', 'pari_passu', 'junior']).optional().default('pari_passu'),
   strikePrice: z.number().min(0).optional().default(0),
   vestingPercent: z.number().min(0).max(100).optional().default(100),
+  expiryDate: z.string().optional().nullable(),
   sortOrder: z.number().int().min(0).optional().default(0),
 });
 

@@ -41,7 +41,7 @@ export function backsolve(inputs: BacksolveInputs): BacksolveResult {
     term,
     dividendYield,
     shareClasses,
-    maxIterations = 200,
+    maxIterations = 500,
     tolerance = 0.01, // $0.01 tolerance on PPS
   } = inputs;
 
@@ -69,9 +69,22 @@ export function backsolve(inputs: BacksolveInputs): BacksolveResult {
   });
 
   let upperPPS = getPerShareValueForClass(makeOPMInputs(upper), targetClassId);
-  while (upperPPS < targetPerShareValue && upper < 1e15) {
-    upper *= 2;
+  // Cap expansion at 1e13 (~$10 trillion) to avoid degenerate equity values
+  while (upperPPS < targetPerShareValue && upper < 1e13) {
+    upper *= 10;
     upperPPS = getPerShareValueForClass(makeOPMInputs(upper), targetClassId);
+  }
+
+  if (upperPPS < targetPerShareValue) {
+    // Target PPS is not achievable within any reasonable equity value — fail fast
+    return {
+      ...calculateOPM(makeOPMInputs(upper)),
+      impliedEquityValue: 0,
+      targetClassId,
+      targetPPS: targetPerShareValue,
+      iterations: 0,
+      converged: false,
+    };
   }
 
   let iterations = 0;
@@ -85,7 +98,15 @@ export function backsolve(inputs: BacksolveInputs): BacksolveResult {
 
     const error = midPPS - targetPerShareValue;
 
+    // Primary: PPS within tolerance
     if (Math.abs(error) < tolerance) {
+      converged = true;
+      break;
+    }
+
+    // Secondary: equity search range has collapsed (handles discontinuities at
+    // conversion breakpoints where the target PPS falls in a step-function gap)
+    if (upper - lower < 1) {
       converged = true;
       break;
     }

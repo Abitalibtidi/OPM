@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { authenticate, authorize, authorizeValuationAccess } from '../middleware/auth';
 import { createAuditLog } from '../middleware/audit';
 import { calculateOPM, backsolve, validateBacksolveInputs } from '../engine';
-import type { ShareClass } from '../../shared/types';
+import type { ShareClass, OPMCalculationResult } from '../../shared/types';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -48,6 +48,40 @@ const updateValuationSchema = z.object({
 
 // All routes require authentication
 router.use(authenticate);
+
+/** Delete old waterfall records and persist fresh ones from a calculation result. */
+async function persistWaterfallDetail(valuationId: string, result: OPMCalculationResult) {
+  await prisma.breakpointRecord.deleteMany({ where: { valuationId } });
+  await prisma.trancheRecord.deleteMany({ where: { valuationId } });
+
+  if (result.breakpoints.length > 0) {
+    await prisma.breakpointRecord.createMany({
+      data: result.breakpoints.map((bp, i) => ({
+        valuationId,
+        equityValue: bp.equityValue,
+        description: bp.description,
+        cumulativePreference: bp.cumulativePreference,
+        participants: JSON.stringify(bp.participants),
+        sortOrder: i,
+      })),
+    });
+  }
+
+  if (result.tranches.length > 0) {
+    await prisma.trancheRecord.createMany({
+      data: result.tranches.map((tr, i) => ({
+        valuationId,
+        lowerBreakpoint: tr.lowerBreakpoint,
+        upperBreakpoint: isFinite(tr.upperBreakpoint) ? tr.upperBreakpoint : null,
+        callValueLower: tr.callValueLower,
+        callValueUpper: tr.callValueUpper,
+        trancheValue: tr.trancheValue,
+        allocations: JSON.stringify(tr.allocations),
+        sortOrder: i,
+      })),
+    });
+  }
+}
 
 /**
  * GET /api/valuations
@@ -141,9 +175,9 @@ router.get('/:id', authorizeValuationAccess, async (req: Request, res: Response)
       include: {
         createdBy: { select: { id: true, email: true, name: true, role: true } },
         shareClasses: { orderBy: { sortOrder: 'asc' } },
-        valuationResults: {
-          include: { shareClass: true },
-        },
+        valuationResults: { include: { shareClass: true } },
+        breakpointRecords: { orderBy: { sortOrder: 'asc' } },
+        trancheRecords: { orderBy: { sortOrder: 'asc' } },
       },
     });
 
@@ -297,6 +331,8 @@ router.post('/:id/calculate', authorizeValuationAccess, async (req: Request, res
       });
     }
 
+    await persistWaterfallDetail(valuation.id, opmResult);
+
     await createAuditLog({
       userId: req.user!.id,
       valuationId: valuation.id,
@@ -394,6 +430,8 @@ router.post('/:id/backsolve', authorizeValuationAccess, async (req: Request, res
         },
       });
     }
+
+    await persistWaterfallDetail(valuation.id, result);
 
     await createAuditLog({
       userId: req.user!.id,

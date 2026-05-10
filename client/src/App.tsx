@@ -8,6 +8,7 @@ import ValuationEditor from './pages/ValuationEditor';
 import ValuationResults from './pages/ValuationResults';
 import AuditLog from './pages/AuditLog';
 import AdminUsers from './pages/AdminUsers';
+import Profile from './pages/Profile';
 
 export default function App() {
   const { user } = useAuth();
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="/valuations/:id/results" element={<ValuationResults />} />
         <Route path="/audit-log" element={<AuditLog />} />
         <Route path="/admin/users" element={<AdminUsers />} />
+        <Route path="/profile" element={<Profile />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

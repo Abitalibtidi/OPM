@@ -19,7 +19,7 @@ import type { ShareClass, Breakpoint, BreakpointParticipant } from '../../shared
 interface ParsedClass {
   id: string;
   name: string;
-  type: 'common' | 'preferred' | 'option';
+  type: 'common' | 'preferred' | 'option' | 'warrant';
   shares: number;              // outstanding shares
   liquidationPref: number;     // total $ liq pref
   isParticipating: boolean;
@@ -41,6 +41,8 @@ function parseClasses(classes: ShareClass[]): ParsedClass[] {
 
     if (sc.type === 'option') {
       asIfCommonShares = vestedShares; // each option converts to 1 common share (net of strike via OPM)
+    } else if (sc.type === 'warrant') {
+      asIfCommonShares = vestedShares; // each warrant converts to 1 common share (net of strike via OPM)
     } else if (sc.type === 'preferred') {
       asIfCommonShares = vestedShares * sc.conversionRatio;
     } else {
@@ -57,7 +59,7 @@ function parseClasses(classes: ShareClass[]): ParsedClass[] {
       participationCap: sc.participationCap,
       conversionRatio: sc.conversionRatio,
       seniorityLevel: sc.seniorityLevel,
-      strikePrice: sc.type === 'option' ? sc.strikePrice : 0,
+      strikePrice: (sc.type === 'option' || sc.type === 'warrant') ? sc.strikePrice : 0,
       vestingPercent: sc.vestingPercent,
       asIfCommonShares: asIfCommonShares,
     };
@@ -92,6 +94,7 @@ export function constructBreakpoints(shareClasses: ShareClass[]): Breakpoint[] {
 
   const commonClasses = classes.filter((c) => c.type === 'common');
   const optionClasses = classes.filter((c) => c.type === 'option');
+  const warrantClasses = classes.filter((c) => c.type === 'warrant');
 
   const breakpointSet = new Map<number, Breakpoint>();
 
@@ -180,17 +183,25 @@ export function constructBreakpoints(shareClasses: ShareClass[]): Breakpoint[] {
   // ── Breakpoints from option strike prices ──
   for (const opt of optionClasses) {
     if (opt.strikePrice > 0 && opt.shares > 0) {
-      // Options enter the money when per-share value exceeds strike
-      // Need to figure out at what total equity value this happens
-      // Approximate: strike * fullyDiluted (simplified)
-      // More precisely: this is handled in the tranche allocation
-      // We add the aggregate strike value as a breakpoint reference
       const totalPrefAmount = preferredClasses.reduce(
         (sum, p) => sum + p.liquidationPref, 0
       );
       const strikeBP = totalPrefAmount + opt.strikePrice * fullyDiluted;
       if (strikeBP > 0) {
         getOrCreateBP(strikeBP, `Options in the money: ${opt.name}`);
+      }
+    }
+  }
+
+  // ── Breakpoints from warrant exercise prices ──
+  for (const w of warrantClasses) {
+    if (w.strikePrice > 0 && w.shares > 0) {
+      const totalPrefAmount = preferredClasses.reduce(
+        (sum, p) => sum + p.liquidationPref, 0
+      );
+      const strikeBP = totalPrefAmount + w.strikePrice * fullyDiluted;
+      if (strikeBP > 0) {
+        getOrCreateBP(strikeBP, `Warrants in the money: ${w.name}`);
       }
     }
   }
@@ -209,6 +220,7 @@ export function constructBreakpoints(shareClasses: ShareClass[]): Breakpoint[] {
       preferredClasses,
       commonClasses,
       optionClasses,
+      warrantClasses,
       fullyDiluted
     );
   }
@@ -226,12 +238,17 @@ function computeParticipants(
   preferredClasses: ParsedClass[],
   commonClasses: ParsedClass[],
   optionClasses: ParsedClass[],
+  warrantClasses: ParsedClass[],
   fullyDiluted: number
 ): BreakpointParticipant[] {
   const participants: BreakpointParticipant[] = [];
 
-  // Determine cumulative preferences
-  const totalPref = preferredClasses.reduce((s, p) => s + p.liquidationPref, 0);
+  // Determine cumulative preferences.
+  // Round to 2 decimal places to match breakpoint creation precision and avoid
+  // floating-point boundary mismatches (e.g. 163743542.25 vs 163743542.25000001).
+  const totalPref = Math.round(
+    preferredClasses.reduce((s, p) => s + p.liquidationPref, 0) * 100
+  ) / 100;
 
   if (equityValue < totalPref) {
     // We're in the liquidation preference waterfall
@@ -250,7 +267,10 @@ function computeParticipants(
 
     for (const level of sortedLevels) {
       const group = seniorityGroups.get(level)!;
-      const groupPref = group.reduce((s, g) => s + g.liquidationPref, 0);
+      // Round to 2 decimal places to match the precision used when creating breakpoints,
+      // preventing a one-ULP floating-point mismatch from keeping a senior class as participant
+      // in the next tranche (e.g. 77072133.32000001 stored in DB vs 77072133.32 in the BP).
+      const groupPref = Math.round(group.reduce((s, g) => s + g.liquidationPref, 0) * 100) / 100;
 
       if (cumulativePaid + groupPref <= equityValue) {
         // This group is fully paid, doesn't receive marginal dollars here
@@ -279,10 +299,14 @@ function computeParticipants(
 
     for (const pref of preferredClasses) {
       if (!pref.isParticipating) {
-        // Non-participating: check if conversion is better
+        // Non-participating: check if conversion is better.
+        // Use a relative epsilon (1e-9) to absorb floating-point rounding: the
+        // conversion breakpoint is stored at 2-decimal precision, so
+        // proRataShare × (roundedBP − totalPref) can undercut liqPref by ~$0.001.
         const proRataShare = pref.asIfCommonShares / fullyDiluted;
         const commonValue = proRataShare * (equityValue - totalPref);
-        if (commonValue >= pref.liquidationPref) {
+        const conversionThreshold = pref.liquidationPref * (1 - 1e-9);
+        if (commonValue >= conversionThreshold) {
           convertedPrefs.push(pref);
         }
         // If not yet at conversion point, preferred just keeps liq pref
@@ -293,8 +317,8 @@ function computeParticipants(
           const capAmount = pref.participationCap * pref.liquidationPref;
           const proRataShare = pref.asIfCommonShares / fullyDiluted;
           const participationValue = pref.liquidationPref + proRataShare * (equityValue - totalPref);
-
-          if (participationValue >= capAmount) {
+          // Same epsilon guard for participation-cap boundary
+          if (participationValue >= capAmount * (1 - 1e-9)) {
             // Cap reached, treat as converted
             convertedPrefs.push(pref);
           } else {
@@ -328,10 +352,17 @@ function computeParticipants(
     }
 
     for (const o of optionClasses) {
-      // Options participate if in the money
       if (o.shares > 0) {
         poolShares += o.asIfCommonShares;
         poolMembers.push({ id: o.id, name: o.name, shares: o.asIfCommonShares });
+      }
+    }
+
+    for (const w of warrantClasses) {
+      // Warrants participate in the common pool like options — OPM nets the strike in per-share value
+      if (w.shares > 0) {
+        poolShares += w.asIfCommonShares;
+        poolMembers.push({ id: w.id, name: w.name, shares: w.asIfCommonShares });
       }
     }
 
@@ -361,7 +392,7 @@ export function getFullyDilutedByClass(
     const vestedShares = sc.sharesOutstanding * (sc.vestingPercent / 100);
     let asConverted: number;
 
-    if (sc.type === 'option') {
+    if (sc.type === 'option' || sc.type === 'warrant') {
       asConverted = vestedShares;
     } else if (sc.type === 'preferred') {
       asConverted = vestedShares * sc.conversionRatio;

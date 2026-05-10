@@ -45,7 +45,7 @@ export interface Valuation {
 }
 
 // ─── Capital Structure ───────────────────────────────────────
-export type ShareClassType = 'common' | 'preferred' | 'option';
+export type ShareClassType = 'common' | 'preferred' | 'option' | 'warrant';
 export type LiquidationSeniority = 'senior' | 'pari_passu' | 'junior';
 
 export interface ShareClass {
@@ -61,8 +61,9 @@ export interface ShareClass {
   conversionRatio: number;           // shares of common per preferred
   seniorityLevel: number;            // 1 = most senior
   liquidationSeniority: LiquidationSeniority;
-  strikePrice: number;               // for options only
-  vestingPercent: number;            // % vested, 0-100
+  strikePrice: number;               // for options and warrants
+  vestingPercent: number;            // % vested, 0-100 (warrants default 100)
+  expiryDate?: string;               // for warrants (ISO date string, informational)
   sortOrder: number;
 }
 
@@ -126,6 +127,43 @@ export interface BacksolveResult extends OPMCalculationResult {
   targetPPS: number;
   iterations: number;
   converged: boolean;
+}
+
+// ─── DLOM ────────────────────────────────────────────────────
+export type DLOMModelName = 'finnerty' | 'chaffe' | 'ghaidarov' | 'longstaff';
+
+export interface DLOMInputs {
+  volatility: number;    // annual, decimal
+  holdingPeriod: number; // years
+  riskFreeRate: number;  // annual, decimal
+}
+
+export interface DLOMModelResult {
+  modelName: DLOMModelName;
+  dlomPercentage: number; // 0–1
+  inputs: DLOMInputs;
+  description: string;
+}
+
+export interface DLOMCalculateRequest {
+  volatility: number;
+  holdingPeriod: number;
+  riskFreeRate: number;
+}
+
+export interface DLOMCalculateResponse {
+  results: DLOMModelResult[];
+}
+
+export interface DLOMSavedResult {
+  id: string;
+  valuationId: string;
+  modelName: DLOMModelName;
+  volatility: number;
+  holdingPeriod: number;
+  riskFreeRate: number;
+  dlomPercentage: number;
+  createdAt: string;
 }
 
 // ─── Audit Log ───────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -9,10 +9,21 @@ import {
   Calculator,
   Target,
   ArrowRight,
+  ArrowUp,
+  ArrowDown,
   ChevronDown,
   ChevronUp,
   AlertCircle,
+  Upload,
+  Download,
 } from 'lucide-react';
+import {
+  downloadCapTableTemplate,
+  parseCapTableFile,
+  type ParseResult,
+  type ParsedRow,
+} from '../utils/capTableImport';
+import CapTableUploadModal from '../components/CapTableUploadModal';
 
 interface ShareClass {
   id: string;
@@ -28,6 +39,7 @@ interface ShareClass {
   liquidationSeniority: string;
   strikePrice: number;
   vestingPercent: number;
+  expiryDate?: string;
   sortOrder: number;
 }
 
@@ -97,6 +109,10 @@ export default function ValuationEditor() {
   const [bsTargetPPS, setBsTargetPPS] = useState(0);
   const [showBacksolve, setShowBacksolve] = useState(false);
 
+  // Cap table upload
+  const [uploadResult, setUploadResult] = useState<ParseResult | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const loadValuation = useCallback(async () => {
     try {
       const data = await api.get<Valuation>(`/valuations/${id}`);
@@ -123,10 +139,7 @@ export default function ValuationEditor() {
       dividendYield: valuation.dividendYield,
       status: valuation.status,
     };
-    // Only include description if it has a value (avoid sending null)
-    if (valuation.description) {
-      payload.description = valuation.description;
-    }
+    payload.description = valuation.description || null;
     await api.put(`/valuations/${id}`, payload);
   }
 
@@ -209,6 +222,21 @@ export default function ValuationEditor() {
     }
   }
 
+  const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function debouncedUpdateShareClass(classId: string, data: Partial<ShareClass>) {
+    if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
+    updateTimerRef.current = setTimeout(() => {
+      handleUpdateShareClass(classId, data);
+    }, 400);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (updateTimerRef.current) clearTimeout(updateTimerRef.current);
+    };
+  }, []);
+
   async function handleDeleteShareClass(classId: string) {
     try {
       await api.delete(`/valuations/${id}/share-classes/${classId}`);
@@ -216,6 +244,72 @@ export default function ValuationEditor() {
     } catch (err: any) {
       setError(err.message);
     }
+  }
+
+  async function handleReorderShareClass(index: number, direction: 'up' | 'down') {
+    if (!valuation) return;
+    const classes = [...valuation.shareClasses];
+    const otherIndex = direction === 'up' ? index - 1 : index + 1;
+    if (otherIndex < 0 || otherIndex >= classes.length) return;
+
+    [classes[index], classes[otherIndex]] = [classes[otherIndex], classes[index]];
+    const updated = classes.map((sc, i) => ({ ...sc, sortOrder: i }));
+
+    setValuation({ ...valuation, shareClasses: updated });
+
+    try {
+      await Promise.all([
+        api.put(`/valuations/${id}/share-classes/${updated[index].id}`, { sortOrder: index }),
+        api.put(`/valuations/${id}/share-classes/${updated[otherIndex].id}`, { sortOrder: otherIndex }),
+      ]);
+    } catch (err: any) {
+      setError(err.message);
+      await loadValuation();
+    }
+  }
+
+  async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Reset input so the same file can be re-uploaded after fixing errors
+    e.target.value = '';
+    setError('');
+    try {
+      const result = await parseCapTableFile(file);
+      setUploadResult(result);
+    } catch (err: any) {
+      setError(`Failed to parse file: ${err.message}`);
+    }
+  }
+
+  async function handleCapTableImport(rows: ParsedRow[]) {
+    if (!valuation) return;
+    const existingByName = new Map(
+      valuation.shareClasses.map((sc) => [sc.name.toLowerCase(), sc])
+    );
+
+    for (let i = 0; i < rows.length; i++) {
+      const { data } = rows[i];
+      const existing = existingByName.get(data.name.toLowerCase());
+      const payload = {
+        ...data,
+        liquidationSeniority: 'pari_passu' as const,
+        sortOrder: existing ? existing.sortOrder : valuation.shareClasses.length + i,
+      };
+
+      if (existing) {
+        await api.put(`/valuations/${id}/share-classes/${existing.id}`, payload);
+      } else {
+        await api.post(`/valuations/${id}/share-classes`, payload);
+      }
+    }
+
+    setUploadResult(null);
+    await loadValuation();
+    setSuccess(
+      `Imported ${rows.length} share class${rows.length !== 1 ? 'es' : ''} successfully`
+    );
+    setTimeout(() => setSuccess(''), 5000);
   }
 
   function newShareClassDefaults(): Partial<ShareClass> {
@@ -232,6 +326,7 @@ export default function ValuationEditor() {
       liquidationSeniority: 'pari_passu',
       strikePrice: 0,
       vestingPercent: 100,
+      expiryDate: '',
       sortOrder: valuation?.shareClasses.length || 0,
     };
   }
@@ -253,10 +348,38 @@ export default function ValuationEditor() {
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">{v.name}</h1>
-          <p className="text-sm text-gray-500">{v.companyName} &middot; {v.valuationDate}</p>
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <input
+            type="text"
+            value={v.name}
+            onChange={(e) => setValuation({ ...v, name: e.target.value })}
+            className="text-2xl font-bold text-gray-900 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-primary-500 focus:outline-none w-full truncate"
+            placeholder="Valuation name"
+          />
+          <div className="flex items-center gap-2 mt-1">
+            <input
+              type="text"
+              value={v.companyName}
+              onChange={(e) => setValuation({ ...v, companyName: e.target.value })}
+              className="text-sm text-gray-500 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-primary-500 focus:outline-none min-w-0"
+              placeholder="Company name"
+            />
+            <span className="text-gray-400 text-sm flex-shrink-0">&middot;</span>
+            <input
+              type="date"
+              value={v.valuationDate}
+              onChange={(e) => setValuation({ ...v, valuationDate: e.target.value })}
+              className="text-sm text-gray-500 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-primary-500 focus:outline-none flex-shrink-0"
+            />
+          </div>
+          <textarea
+            value={v.description || ''}
+            onChange={(e) => setValuation({ ...v, description: e.target.value })}
+            rows={2}
+            className="mt-2 text-sm text-gray-500 bg-transparent border border-transparent hover:border-gray-200 focus:border-primary-400 focus:ring-0 focus:outline-none rounded-md px-1 w-full resize-none placeholder-gray-300"
+            placeholder="Add a description or notes…"
+          />
         </div>
         <div className="flex items-center gap-2">
           <select
@@ -351,28 +474,75 @@ export default function ValuationEditor() {
       <div className="bg-white rounded-xl border border-gray-200 p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-gray-900">Capital Structure</h2>
-          <button
-            onClick={() => { setEditingClass(newShareClassDefaults()); setShowAddClass(true); }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-primary-50 text-primary-700 hover:bg-primary-100 text-sm font-medium rounded-lg transition-colors"
-          >
-            <Plus className="h-4 w-4" />
-            Add Class
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={downloadCapTableTemplate}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 hover:bg-gray-50 text-sm font-medium rounded-lg transition-colors"
+              title="Download Excel template"
+            >
+              <Download className="h-4 w-4" />
+              Template
+            </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-primary-300 text-primary-700 hover:bg-primary-50 text-sm font-medium rounded-lg transition-colors"
+            >
+              <Upload className="h-4 w-4" />
+              Upload Cap Table
+            </button>
+            <button
+              onClick={() => { setEditingClass(newShareClassDefaults()); setShowAddClass(true); }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-primary-50 text-primary-700 hover:bg-primary-100 text-sm font-medium rounded-lg transition-colors"
+            >
+              <Plus className="h-4 w-4" />
+              Add Class
+            </button>
+          </div>
         </div>
+
+        {/* Hidden file input for cap table upload */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".xlsx,.csv"
+          className="hidden"
+          onChange={handleFileSelect}
+        />
 
         {v.shareClasses.length === 0 ? (
           <p className="text-gray-500 text-sm py-4 text-center">No share classes yet. Add one to get started.</p>
         ) : (
           <div className="space-y-3">
-            {v.shareClasses.map((sc) => (
+            {v.shareClasses.map((sc, scIdx) => (
               <div key={sc.id} className="border border-gray-200 rounded-lg overflow-hidden">
                 <div
                   className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50"
                   onClick={() => setExpandedClass(expandedClass === sc.id ? null : sc.id)}
                 >
                   <div className="flex items-center gap-3">
+                    <div className="flex flex-col gap-0.5" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        onClick={() => handleReorderShareClass(scIdx, 'up')}
+                        disabled={scIdx === 0}
+                        className="p-0.5 text-gray-300 hover:text-gray-600 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+                        title="Move up"
+                      >
+                        <ArrowUp className="h-3 w-3" />
+                      </button>
+                      <button
+                        onClick={() => handleReorderShareClass(scIdx, 'down')}
+                        disabled={scIdx === v.shareClasses.length - 1}
+                        className="p-0.5 text-gray-300 hover:text-gray-600 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+                        title="Move down"
+                      >
+                        <ArrowDown className="h-3 w-3" />
+                      </button>
+                    </div>
                     <span className={`inline-block w-2.5 h-2.5 rounded-full ${
-                      sc.type === 'preferred' ? 'bg-blue-500' : sc.type === 'option' ? 'bg-purple-500' : 'bg-green-500'
+                      sc.type === 'preferred' ? 'bg-blue-500'
+                      : sc.type === 'option' ? 'bg-purple-500'
+                      : sc.type === 'warrant' ? 'bg-orange-500'
+                      : 'bg-green-500'
                     }`} />
                     <div>
                       <span className="font-medium text-gray-900">{sc.name}</span>
@@ -398,7 +568,7 @@ export default function ValuationEditor() {
                   <div className="border-t border-gray-200 p-4 bg-gray-50">
                     <ShareClassForm
                       value={sc}
-                      onChange={(data) => handleUpdateShareClass(sc.id, data)}
+                      onChange={(data) => debouncedUpdateShareClass(sc.id, data)}
                     />
                   </div>
                 )}
@@ -513,6 +683,16 @@ export default function ValuationEditor() {
           </div>
         </div>
       )}
+
+      {/* Cap Table Upload Preview Modal */}
+      {uploadResult && valuation && (
+        <CapTableUploadModal
+          result={uploadResult}
+          existingNames={new Set(valuation.shareClasses.map((sc) => sc.name.toLowerCase()))}
+          onConfirm={handleCapTableImport}
+          onClose={() => setUploadResult(null)}
+        />
+      )}
     </div>
   );
 }
@@ -548,6 +728,7 @@ function ShareClassForm({ value, onChange, isNew }: {
           <option value="common">Common</option>
           <option value="preferred">Preferred</option>
           <option value="option">Option</option>
+          <option value="warrant">Warrant</option>
         </select>
       </div>
       <div>
@@ -657,6 +838,33 @@ function ShareClassForm({ value, onChange, isNew }: {
               max={100}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
             />
+          </div>
+        </>
+      )}
+
+      {sc.type === 'warrant' && (
+        <>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Exercise Price ($)</label>
+            <input
+              type="number"
+              value={sc.strikePrice || 0}
+              onChange={(e) => update('strikePrice', parseFloat(e.target.value) || 0)}
+              min={0}
+              step="0.01"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+            />
+            <p className="text-xs text-gray-400 mt-0.5">Price at which the warrant can be exercised</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Expiry Date</label>
+            <input
+              type="date"
+              value={sc.expiryDate || ''}
+              onChange={(e) => update('expiryDate', e.target.value || null)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+            />
+            <p className="text-xs text-gray-400 mt-0.5">Informational — does not affect OPM (term parameter governs)</p>
           </div>
         </>
       )}

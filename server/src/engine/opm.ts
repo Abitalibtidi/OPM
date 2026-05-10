@@ -113,25 +113,43 @@ export function calculateOPM(inputs: OPMInputs): OPMCalculationResult {
   const totalAllocated = Array.from(classValues.values()).reduce((s, v) => s + v, 0);
 
   const results: Omit<ValuationResult, 'id' | 'valuationId'>[] = shareClasses.map((sc) => {
-    const totalValue = classValues.get(sc.id) || 0;
+    // grossValue = the OPM waterfall allocation for this class (call-spread sum).
+    // This is what the OPM "bucket" captures — 100% of equity sums across all buckets.
+    const grossValue = classValues.get(sc.id) || 0;
     const fdShares = fullyDilutedMap.get(sc.id) || 0;
 
-    // For options, subtract the strike price from per-share value
-    let perShareValue = fdShares > 0 ? totalValue / fdShares : 0;
-    if (sc.type === 'option' && sc.strikePrice > 0) {
+    // perShareValue is the 409A FMV: for options the holder pays the exercise price,
+    // so the net economic benefit per share is grossValue/shares − strike.
+    // We floor at zero (options can't have negative intrinsic value).
+    let perShareValue = fdShares > 0 ? grossValue / fdShares : 0;
+    if ((sc.type === 'option' || sc.type === 'warrant') && sc.strikePrice > 0) {
       perShareValue = Math.max(perShareValue - sc.strikePrice, 0);
     }
 
     return {
       shareClassId: sc.id,
       shareClass: sc,
-      optionValue: totalValue,
+      // optionValue stores the gross OPM allocation for all class types (legacy field name).
+      optionValue: grossValue,
       perShareValue,
-      totalValue: perShareValue * fdShares,
-      allocationPercent: totalAllocated > 0 ? totalValue / totalAllocated : 0,
+      // totalValue is the gross OPM allocation so that Σ totalValue === totalEquityValue.
+      // For options: totalValue (gross) − perShareValue × fdShares = aggregate exercise proceeds,
+      // which flow back to the company rather than to option holders.
+      totalValue: grossValue,
+      allocationPercent: totalAllocated > 0 ? grossValue / totalAllocated : 0,
       fullyDilutedShares: fdShares,
     };
   });
+
+  // Reconciliation guard: gross allocations must equal total equity within floating-point tolerance.
+  if (process.env.NODE_ENV !== 'production') {
+    const reconciled = results.reduce((s, r) => s + r.totalValue, 0);
+    if (Math.abs(reconciled - totalEquityValue) > Math.max(0.01, totalEquityValue * 1e-9)) {
+      console.warn(
+        `OPM reconciliation error: allocated ${reconciled.toFixed(4)} vs equity ${totalEquityValue.toFixed(4)}, diff ${(reconciled - totalEquityValue).toFixed(4)}`
+      );
+    }
+  }
 
   return {
     breakpoints,
